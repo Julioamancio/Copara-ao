@@ -9,6 +9,7 @@ class ComparisonDashboard {
         this.bindEvents();
         this.updateThresholdDisplay();
         this.setupFileUploadAreas();
+        this.checkCompareButtonState();
     }
 
     setupFileUploadAreas() {
@@ -110,14 +111,15 @@ class ComparisonDashboard {
             this.updateThresholdDisplay();
         });
 
-        // Column selects
-        document.getElementById('column1').addEventListener('change', () => {
-            this.checkCompareButtonState();
-        });
-
-        document.getElementById('column2').addEventListener('change', () => {
-            this.checkCompareButtonState();
-        });
+        // Column selects (guards)
+        const col1El = document.getElementById('column1');
+        if (col1El) {
+            col1El.addEventListener('change', () => this.checkCompareButtonState());
+        }
+        const col2El = document.getElementById('column2');
+        if (col2El) {
+            col2El.addEventListener('change', () => this.checkCompareButtonState());
+        }
     }
 
     updateThresholdDisplay() {
@@ -175,26 +177,30 @@ class ComparisonDashboard {
         document.getElementById('file1Rows').textContent = data.file1_info.rows.toLocaleString();
         
         const col1Select = document.getElementById('column1');
-        col1Select.innerHTML = '<option value="">Selecione uma coluna...</option>';
-        data.file1_info.columns.forEach(col => {
-            const option = document.createElement('option');
-            option.value = col;
-            option.textContent = col;
-            col1Select.appendChild(option);
-        });
+        if (col1Select) {
+            col1Select.innerHTML = '<option value="">Selecione uma coluna...</option>';
+            data.file1_info.columns.forEach(col => {
+                const option = document.createElement('option');
+                option.value = col;
+                option.textContent = col;
+                col1Select.appendChild(option);
+            });
+        }
 
         // File 2 info
         document.getElementById('file2Name').textContent = data.file2_info.name;
         document.getElementById('file2Rows').textContent = data.file2_info.rows.toLocaleString();
         
         const col2Select = document.getElementById('column2');
-        col2Select.innerHTML = '<option value="">Selecione uma coluna...</option>';
-        data.file2_info.columns.forEach(col => {
-            const option = document.createElement('option');
-            option.value = col;
-            option.textContent = col;
-            col2Select.appendChild(option);
-        });
+        if (col2Select) {
+            col2Select.innerHTML = '<option value="">Selecione uma coluna...</option>';
+            data.file2_info.columns.forEach(col => {
+                const option = document.createElement('option');
+                option.value = col;
+                option.textContent = col;
+                col2Select.appendChild(option);
+            });
+        }
 
         // Show sections
         document.getElementById('fileInfoSection').style.display = 'block';
@@ -203,6 +209,8 @@ class ComparisonDashboard {
         // Add fade-in animation
         document.getElementById('fileInfoSection').classList.add('fade-in');
         document.getElementById('configSection').classList.add('fade-in');
+        
+        this.checkCompareButtonState();
     }
 
     async handleComparison() {
@@ -255,7 +263,7 @@ class ComparisonDashboard {
         tbody.innerHTML = '';
 
         if (data.results.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Nenhuma correspondência encontrada</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Nenhuma correspondência encontrada</td></tr>';
             return;
         }
 

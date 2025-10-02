@@ -182,12 +182,15 @@ def upload_files():
         if not (allowed_file(file1.filename) and allowed_file(file2.filename)):
             return jsonify({'error': 'Formato de arquivo não suportado'}), 400
         
-        # Salvar arquivos temporariamente
+        # Salvar arquivos temporariamente com nomes fixos para posterior comparação
         filename1 = secure_filename(file1.filename)
         filename2 = secure_filename(file2.filename)
         
-        filepath1 = os.path.join(app.config['UPLOAD_FOLDER'], filename1)
-        filepath2 = os.path.join(app.config['UPLOAD_FOLDER'], filename2)
+        ext1 = os.path.splitext(filename1)[1].lower()
+        ext2 = os.path.splitext(filename2)[1].lower()
+        
+        filepath1 = os.path.join(app.config['UPLOAD_FOLDER'], f'file1{ext1}')
+        filepath2 = os.path.join(app.config['UPLOAD_FOLDER'], f'file2{ext2}')
         
         file1.save(filepath1)
         file2.save(filepath2)
@@ -195,12 +198,12 @@ def upload_files():
         # Read the uploaded files
         try:
             # First file is the base file with names (column A) and classes (column B)
-            if filename1.endswith('.csv'):
+            if ext1 == '.csv':
                 df1 = pd.read_csv(filepath1)
             else:
                 df1 = pd.read_excel(filepath1)
             # Second file contains TOEFL students names for comparison
-            if filename2.endswith('.csv'):
+            if ext2 == '.csv':
                 df2 = pd.read_csv(filepath2)
             else:
                 df2 = pd.read_excel(filepath2)
@@ -231,22 +234,29 @@ def upload_files():
 def compare_names():
     try:
         data = request.get_json()
-        threshold = float(data.get('threshold', 80)) / 100
-        algorithm = data.get('algorithm', 'levenshtein')
+        threshold = float(data.get('threshold', 80))  # threshold em escala 0-100
+        algorithm = data.get('algorithm', 'token_sort_ratio')
         
-        # Read the uploaded files directly without asking for columns
-        file1_path = os.path.join(app.config['UPLOAD_FOLDER'], 'file1.xlsx')
-        file2_path = os.path.join(app.config['UPLOAD_FOLDER'], 'file2.xlsx')
+        # Função auxiliar para localizar arquivos por base name e extensões suportadas
+        def find_uploaded_file(base_name):
+            for ext in ['.xlsx', '.xls', '.csv']:
+                path = os.path.join(app.config['UPLOAD_FOLDER'], f'{base_name}{ext}')
+                if os.path.exists(path):
+                    return path, ext
+            return None, None
         
-        if not os.path.exists(file1_path) or not os.path.exists(file2_path):
+        file1_path, ext1 = find_uploaded_file('file1')
+        file2_path, ext2 = find_uploaded_file('file2')
+        
+        if not file1_path or not file2_path:
             return jsonify({'success': False, 'error': 'Arquivos não encontrados. Faça o upload novamente.'})
         
         # Read the uploaded files
         try:
             # Base file: Column A = Names, Column B = Classes
-            df1 = pd.read_excel(file1_path)
+            df1 = pd.read_excel(file1_path) if ext1 in ['.xlsx', '.xls'] else pd.read_csv(file1_path)
             # TOEFL file: Column A = Names (format: LASTNAME, FIRSTNAME or LASTNAME, FIRSTNAME MIDDLE)
-            df2 = pd.read_excel(file2_path)
+            df2 = pd.read_excel(file2_path) if ext2 in ['.xlsx', '.xls'] else pd.read_csv(file2_path)
             
             # Get names and classes from base file (columns A and B)
             base_names = df1.iloc[:, 0].dropna().astype(str).tolist()  # Column A: Full names
@@ -266,21 +276,21 @@ def compare_names():
                 best_class = ''
                 
                 for j, base_name in enumerate(base_names):
-                     # Compare TOEFL name with base name
-                     score = comparator.compare_names(toefl_name, base_name, algorithm)
-                     
-                     if score >= (threshold * 100) and score > best_score:
-                         best_match = base_name
-                         best_score = score
-                         best_class = base_classes[j] if j < len(base_classes) else ''
-                 
-                 if best_match:
-                     results.append({
-                         'toefl_name': toefl_name,
-                         'matched_name': best_match,
-                         'class': best_class,
-                         'score': round(best_score, 2)
-                     })
+                    # Compare TOEFL name with base name
+                    score = comparator.compare_names(toefl_name, base_name, algorithm)
+                    
+                    if score >= threshold and score > best_score:
+                        best_match = base_name
+                        best_score = score
+                        best_class = base_classes[j] if j < len(base_classes) else ''
+                
+                if best_match:
+                    results.append({
+                        'toefl_name': toefl_name,
+                        'matched_name': best_match,
+                        'class': best_class,
+                        'score': round(best_score, 2)
+                    })
             
             # Calculate statistics
             total_toefl = len(toefl_names)
@@ -311,29 +321,17 @@ def export_results():
         data = request.get_json()
         results = data.get('results', [])
         
-        # Criar DataFrame para exportação
-        export_data = []
+        # Criar DataFrame para exportação alinhado ao formato atual dos resultados
+        export_rows = []
+        for r in results:
+            export_rows.append({
+                'Nome_TOEFL': r.get('toefl_name', ''),
+                'Nome_Encontrado': r.get('matched_name', ''),
+                'Turma': r.get('class', ''),
+                'Similaridade_%': r.get('score', 0)
+            })
         
-        for result in results:
-            base_row = {
-                'Nome_Planilha1': result['nome_planilha1'],
-                'Index_Planilha1': result['index_planilha1'],
-                'Total_Matches': result['total_matches']
-            }
-            
-            if result['matches']:
-                for i, match in enumerate(result['matches'][:3]):  # Top 3 matches
-                    row = base_row.copy()
-                    row.update({
-                        f'Match_{i+1}_Nome': match['nome_planilha2'],
-                        f'Match_{i+1}_Index': match['index_planilha2'],
-                        f'Match_{i+1}_Score': match['score']
-                    })
-                    export_data.append(row)
-            else:
-                export_data.append(base_row)
-        
-        df_export = pd.DataFrame(export_data)
+        df_export = pd.DataFrame(export_rows)
         
         # Criar arquivo Excel em memória
         output = io.BytesIO()
