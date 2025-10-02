@@ -1,0 +1,6 @@
+Flask==2.3.3
+pandas==2.0.3
+openpyxl==3.1.2
+rapidfuzz==3.4.0
+Werkzeug==2.3.7
+xlrd==2.0.1
