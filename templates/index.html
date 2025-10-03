@@ -63,8 +63,8 @@
                                             <div class="upload-area" id="upload1">
                                                 <i class="fas fa-cloud-upload-alt"></i>
                                                 <p>Clique ou arraste a planilha base aqui</p>
-                                                <small class="text-muted">Formato: Nome (Col A) | Turma (Col B)</small>
-                                                <input type="file" id="file1" accept=".xlsx,.xls" hidden>
+                                                <small class="text-muted">Formato: Nome (Col A) | Turma (Col B) | Suporta CSV</small>
+                                                <input type="file" id="file1" accept=".xlsx,.xls,.csv" hidden>
                                             </div>
                                             <div class="file-info" id="info1" style="display: none;">
                                                 <div class="d-flex justify-content-between align-items-center">
@@ -93,8 +93,8 @@
                                             <div class="upload-area" id="upload2">
                                                 <i class="fas fa-cloud-upload-alt"></i>
                                                 <p>Clique ou arraste a planilha TOEFL aqui</p>
-                                                <small class="text-muted">Apenas nomes dos alunos TOEFL</small>
-                                                <input type="file" id="file2" accept=".xlsx,.xls" hidden>
+                                                <small class="text-muted">Apenas nomes dos alunos TOEFL (suporta CSV)</small>
+                                                <input type="file" id="file2" accept=".xlsx,.xls,.csv" hidden>
                                             </div>
                                             <div class="file-info" id="info2" style="display: none;">
                                                 <div class="d-flex justify-content-between align-items-center">
@@ -201,6 +201,26 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="column1" class="form-label">Coluna de Nomes na Planilha Base</label>
+                                    <select id="column1" class="form-select">
+                                        <!-- opções preenchidas após upload -->
+                                    </select>
+                                    <div class="form-text">Selecione a coluna que contém os nomes dos alunos na planilha base</div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="column2" class="form-label">Coluna de Nomes na Planilha TOEFL</label>
+                                    <select id="column2" class="form-select">
+                                        <!-- opções preenchidas após upload -->
+                                    </select>
+                                    <div class="form-text">Selecione a coluna que contém os nomes dos alunos na planilha TOEFL</div>
+                                </div>
+                            </div>
+                        </div>
                         <button id="compareBtn" class="btn btn-success" disabled>
                             <i class="fas fa-search me-2"></i>
                             Iniciar Comparação
@@ -243,6 +263,14 @@
                             <i class="fas fa-info-circle me-1"></i>
                             Alunos TOEFL encontrados na planilha base com suas respectivas <strong>turmas</strong>
                         </p>
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <label for="professorFilter" class="form-label">Filtrar por Professor</label>
+                                <select id="professorFilter" class="form-select">
+                                    <option value="__ALL__">Todos os Professores</option>
+                                </select>
+                            </div>
+                        </div>
                         <!-- Statistics Cards -->
                         <div class="row mb-4">
                             <div class="col-md-3">
@@ -288,12 +316,73 @@
                                         <th>Nome TOEFL</th>
                                         <th>Nome Encontrado</th>
                                         <th>Turma</th>
+                                        <th>Professor</th>
+                                        <th>Nível</th>
                                         <th>Similaridade</th>
                                     </tr>
                                 </thead>
                                 <tbody id="resultsTableBody">
                                 </tbody>
                             </table>
+                        </div>
+                        <!-- Unmatched Section -->
+                        <div class="mt-4" id="unmatchedSection" style="display: none;">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h6 class="mb-0">
+                                        <i class="fas fa-user-times me-2"></i>
+                                        Nomes TOEFL não encontrados
+                                    </h6>
+                                </div>
+                                <div class="card-body">
+                                    <p class="card-text text-muted small mb-3">
+                                        Ajuste o limiar ou troque o algoritmo para tentar melhorar a taxa de sucesso.
+                                    </p>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm">
+                                            <thead>
+                                                <tr>
+                                                    <th>#</th>
+                                                    <th>Nome TOEFL</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="unmatchedTableBody"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Suggestions Section -->
+                        <div class="mt-4" id="suggestionsSection" style="display: none;">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h6 class="mb-0">
+                                        <i class="fas fa-lightbulb me-2"></i>
+                                        Sugestões de correspondência abaixo do limiar
+                                    </h6>
+                                </div>
+                                <div class="card-body">
+                                    <p class="card-text text-muted small mb-3">
+                                        Nenhuma correspondência atingiu o limiar. Veja as sugestões mais próximas e ajuste o limiar/algoritmo.
+                                    </p>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm">
+                                            <thead>
+                                                <tr>
+                                                    <th>#</th>
+                                                    <th>Nome TOEFL</th>
+                                                    <th>Nome Sugerido</th>
+                                                    <th>Similaridade (%)</th>
+                                                    <th>Turma</th>
+                                                    <th>Professor</th>
+                                                    <th>Nível</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="suggestionsTableBody"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

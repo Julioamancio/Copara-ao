@@ -130,9 +130,13 @@ class ComparisonDashboard {
     checkCompareButtonState() {
         const file1 = document.getElementById('file1').files.length > 0;
         const file2 = document.getElementById('file2').files.length > 0;
+        const col1El = document.getElementById('column1');
+        const col2El = document.getElementById('column2');
+        const col1Selected = col1El ? (col1El.value && col1El.value.length > 0) : true;
+        const col2Selected = col2El ? (col2El.value && col2El.value.length > 0) : true;
         
         const compareBtn = document.getElementById('compareBtn');
-        compareBtn.disabled = !(file1 && file2);
+        compareBtn.disabled = !(file1 && file2 && col1Selected && col2Selected);
     }
 
     async handleFileUpload() {
@@ -216,10 +220,16 @@ class ComparisonDashboard {
     async handleComparison() {
         const threshold = document.getElementById('threshold').value;
         const algorithm = document.getElementById('algorithm').value;
+        const column1El = document.getElementById('column1');
+        const column2El = document.getElementById('column2');
+        const column1 = column1El ? column1El.value : null;
+        const column2 = column2El ? column2El.value : null;
 
         const requestData = {
             threshold: parseInt(threshold),
-            algorithm: algorithm
+            algorithm: algorithm,
+            column1: column1,
+            column2: column2
         };
 
         try {
@@ -258,28 +268,119 @@ class ComparisonDashboard {
         document.getElementById('unmatchedCount').textContent = data.statistics.unmatched.toLocaleString();
         document.getElementById('matchPercentage').textContent = data.statistics.match_percentage + '%';
 
-        // Update results table
-        const tbody = document.getElementById('resultsTableBody');
-        tbody.innerHTML = '';
-
-        if (data.results.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Nenhuma correspondência encontrada</td></tr>';
-            return;
+        // Build professor filter options
+        const professorSelect = document.getElementById('professorFilter');
+        if (professorSelect) {
+            const uniqueProfs = Array.from(new Set((data.results || []).map(r => (r.professor || '').trim()).filter(v => v)));
+            // Reset and populate
+            professorSelect.innerHTML = '<option value="__ALL__">Todos os Professores</option>';
+            uniqueProfs.sort((a, b) => a.localeCompare(b, 'pt-BR'));
+            uniqueProfs.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p;
+                professorSelect.appendChild(opt);
+            });
         }
 
-        data.results.forEach((result, index) => {
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td>${index + 1}</td>
-                <td>${result.toefl_name}</td>
-                <td>${result.matched_name}</td>
-                <td>${result.class || 'N/A'}</td>
-                <td>
-                    <span class="badge bg-success">${result.score}%</span>
-                </td>
-            `;
-            tbody.appendChild(row);
-        });
+        const tbody = document.getElementById('resultsTableBody');
+        const renderRows = (items) => {
+            tbody.innerHTML = '';
+            if (!items || items.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">Nenhuma correspondência encontrada</td></tr>';
+                return;
+            }
+            // Sort alphabetically by matched_name within filter
+            const sorted = items.slice().sort((a, b) => (a.matched_name || '').localeCompare(b.matched_name || '', 'pt-BR'));
+            sorted.forEach((result, index) => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td>${this.escapeHtml(result.toefl_name)}</td>
+                    <td>${this.escapeHtml(result.matched_name)}</td>
+                    <td>${result.class ? this.escapeHtml(result.class) : 'N/A'}</td>
+                    <td>${result.professor ? this.escapeHtml(result.professor) : 'N/A'}</td>
+                    <td>${result.nivel ? this.escapeHtml(result.nivel) : 'N/A'}</td>
+                    <td><span class="badge bg-success">${result.score}%</span></td>
+                `;
+                tbody.appendChild(row);
+            });
+        };
+
+        // Initial render with all results
+        renderRows(data.results);
+        // Attach filter change
+        if (professorSelect) {
+            professorSelect.onchange = () => {
+                const val = professorSelect.value;
+                const filtered = val === '__ALL__' ? data.results : (data.results || []).filter(r => (r.professor || '').trim() === val);
+                renderRows(filtered);
+            };
+        }
+
+        // Update unmatched table if provided
+        const unmatchedSection = document.getElementById('unmatchedSection');
+        const unmatchedBody = document.getElementById('unmatchedTableBody');
+        if (unmatchedSection && unmatchedBody) {
+            if (data.unmatched_list && data.unmatched_list.length > 0) {
+                unmatchedSection.style.display = 'block';
+                unmatchedBody.innerHTML = '';
+                data.unmatched_list.forEach((name, idx) => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${idx + 1}</td>
+                        <td>${this.escapeHtml(name)}</td>
+                    `;
+                    unmatchedBody.appendChild(row);
+                });
+            } else {
+                unmatchedSection.style.display = 'none';
+            }
+        }
+
+        // Update suggestions section if provided
+        const suggestionsSection = document.getElementById('suggestionsSection');
+        const suggestionsBody = document.getElementById('suggestionsTableBody');
+        if (suggestionsSection && suggestionsBody) {
+            if (data.suggestions && data.suggestions.length > 0) {
+                suggestionsSection.style.display = 'block';
+                suggestionsBody.innerHTML = '';
+                let rowIndex = 0;
+                data.suggestions.forEach((item) => {
+                    if (item.candidates && item.candidates.length > 0) {
+                        item.candidates.forEach((cand) => {
+                            rowIndex += 1;
+                            const row = document.createElement('tr');
+                            row.innerHTML = `
+                                <td>${rowIndex}</td>
+                                <td>${this.escapeHtml(item.toefl_name)}</td>
+                                <td>${this.escapeHtml(cand.name)}</td>
+                                <td>${cand.score}%</td>
+                                <td>${cand.class ? this.escapeHtml(cand.class) : 'N/A'}</td>
+                                <td>${cand.professor ? this.escapeHtml(cand.professor) : 'N/A'}</td>
+                                <td>${cand.nivel ? this.escapeHtml(cand.nivel) : 'N/A'}</td>
+                            `;
+                            suggestionsBody.appendChild(row);
+                        });
+                    } else {
+                        rowIndex += 1;
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${rowIndex}</td>
+                            <td>${this.escapeHtml(item.toefl_name)}</td>
+                            <td>-</td>
+                            <td>-</td>
+                            <td>N/A</td>
+                            <td>N/A</td>
+                            <td>N/A</td>
+                        `;
+                        suggestionsBody.appendChild(row);
+                    }
+                });
+            } else {
+                suggestionsSection.style.display = 'none';
+            }
+        }
 
         // Show results section
         document.getElementById('resultsSection').style.display = 'block';
@@ -313,7 +414,8 @@ class ComparisonDashboard {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    results: this.currentResults.results
+                    results: this.currentResults.results,
+                    unmatched_list: this.currentResults.unmatched_list || []
                 })
             });
 
