@@ -55,8 +55,390 @@ class NameComparator:
         # Remove punctuation except commas (important for TOEFL format)
         import re
         name = re.sub(r'[^\w\s,]', '', name)
-        
+
         return name
+
+    def parse_toefl_name(self, toefl_name):
+        """Parse TOEFL format name (LASTNAME, FIRSTNAME [MIDDLE])"""
+        normalized = self.normalize_name(toefl_name)
+        
+        if ',' in normalized:
+            parts = normalized.split(',')
+            if len(parts) >= 2:
+                lastname = parts[0].strip()
+                firstname_parts = parts[1].strip().split()
+                firstname = firstname_parts[0] if firstname_parts else ''
+                
+                # Return both possible combinations
+                return {
+                    'lastname': lastname,
+                    'firstname': firstname,
+                    'full_name_normal': f"{firstname} {lastname}",
+                    'full_name_reverse': f"{lastname} {firstname}"
+                }
+        
+        # If no comma, treat as regular name
+        return {
+            'lastname': '',
+            'firstname': normalized,
+            'full_name_normal': normalized,
+            'full_name_reverse': normalized
+        }
+
+    def parse_base_name(self, base_name):
+        """Parse base name (full name format)"""
+        normalized = self.normalize_name(base_name)
+        parts = normalized.split()
+        
+        if len(parts) >= 2:
+            # Remove stopwords
+            filtered_parts = [part for part in parts if part not in self.stopwords]
+            
+            if len(filtered_parts) >= 2:
+                firstname = filtered_parts[0]
+                lastname = filtered_parts[-1]
+                
+                return {
+                    'firstname': firstname,
+                    'lastname': lastname,
+                    'full_name': normalized,
+                    'parts': filtered_parts
+                }
+        
+        return {
+            'firstname': normalized,
+            'lastname': '',
+            'full_name': normalized,
+            'parts': parts
+        }
+
+    def compare_names(self, toefl_name, base_name, algorithm='token_sort_ratio'):
+        """Compare TOEFL format name with base name and return score 0-100 (weighted average)."""
+        toefl_parsed = self.parse_toefl_name(toefl_name)
+        base_parsed = self.parse_base_name(base_name)
+
+        # Raw component scores
+        firstname_score = None
+        lastname_score = None
+        full_name_scores = []
+
+        # First/last name components
+        if toefl_parsed['firstname'] and base_parsed['firstname']:
+            firstname_score = self._calculate_similarity(
+                toefl_parsed['firstname'], base_parsed['firstname'], algorithm
+            )
+
+        if toefl_parsed['lastname'] and base_parsed['lastname']:
+            lastname_score = self._calculate_similarity(
+                toefl_parsed['lastname'], base_parsed['lastname'], algorithm
+            )
+
+        # Full name variants
+        comparisons = [
+            (toefl_parsed['full_name_normal'], base_parsed['full_name']),
+            (toefl_parsed['full_name_reverse'], base_parsed['full_name']),
+            (f"{toefl_parsed['firstname']} {toefl_parsed['lastname']}", base_parsed['full_name']),
+            (f"{toefl_parsed['lastname']} {toefl_parsed['firstname']}", base_parsed['full_name']),
+        ]
+
+        for toefl_variant, base_full in comparisons:
+            if toefl_variant and base_full:
+                full_name_scores.append(
+                    self._calculate_similarity(toefl_variant, base_full, algorithm)
+                )
+
+        max_full = max(full_name_scores) if full_name_scores else None
+
+        # Weighted average with dynamic weights based on available components
+        weights = []
+        values = []
+
+        if firstname_score is not None:
+            weights.append(0.4)
+            values.append(firstname_score)
+        if lastname_score is not None:
+            weights.append(0.4)
+            values.append(lastname_score)
+        if max_full is not None:
+            weights.append(0.2)
+            values.append(max_full)
+
+        if values:
+            total_weight = sum(weights)
+            weighted_avg = sum(v * w for v, w in zip(values, weights)) / total_weight
+        else:
+            weighted_avg = 0
+
+        # Space-insensitive comparison to handle concatenated names (e.g., "oliveiraclimenia")
+        import re
+        compact_toefl = re.sub(r"\s+", "", self.normalize_name(toefl_name))
+        compact_base = re.sub(r"\s+", "", base_parsed.get('full_name', ''))
+        compact_score = self._calculate_similarity(compact_toefl, compact_base, 'ratio') if compact_base else 0
+
+        # Reforço baseado em tokens para lidar com casos de apenas um nome coincidente
+        toefl_tokens = set(self.normalize_name(toefl_name).split())
+        base_tokens = set(base_parsed.get('parts', []))
+        overlap = toefl_tokens.intersection(base_tokens)
+        jaccard_score = (len(overlap) / max(1, len(base_tokens))) * 100
+
+        max_first_token_score = 0
+        max_last_token_score = 0
+        base_first = base_parsed.get('firstname', '')
+        base_last = base_parsed.get('lastname', '')
+        if base_first:
+            for tok in toefl_tokens:
+                s = self._calculate_similarity(base_first, tok, algorithm)
+                if s > max_first_token_score:
+                    max_first_token_score = s
+        if base_last:
+            for tok in toefl_tokens:
+                s = self._calculate_similarity(base_last, tok, algorithm)
+                if s > max_last_token_score:
+                    max_last_token_score = s
+
+        final_score = max(
+            weighted_avg,
+            max_full if max_full is not None else 0,
+            jaccard_score,
+            max_first_token_score,
+            max_last_token_score,
+            compact_score,
+        )
+        # Penalizar correspondências de um único token quando o nome TOEFL tem 2+ tokens
+        # Mas evitar penalidade quando a comparação sem espaços indicar alta similaridade
+        compact_match_high = compact_score >= 90
+        if len(toefl_tokens) >= 2 and len(overlap) < 2 and not compact_match_high:
+            final_score = min(final_score, 75)
+        return final_score
+    
+    def _calculate_similarity(self, str1, str2, algorithm='token_sort_ratio'):
+        """Calculate similarity between two strings"""
+        if not str1 or not str2:
+            return 0
+        
+        if algorithm == 'ratio':
+            return fuzz.ratio(str1, str2)
+        elif algorithm == 'partial_ratio':
+            return fuzz.partial_ratio(str1, str2)
+        elif algorithm == 'token_sort_ratio':
+            return fuzz.token_sort_ratio(str1, str2)
+        elif algorithm == 'token_set_ratio':
+            return fuzz.token_set_ratio(str1, str2)
+        else:
+            return fuzz.token_sort_ratio(str1, str2)
+
+# Utilitário: mapeia colunas da planilha TOEFL para nomes padronizados
+def build_toefl_columns_map(df_columns, normalizer):
+    mapping = {}
+    for col in df_columns:
+        norm = normalizer(str(col))
+        # Preferir correspondência EXATA dos cabeçalhos fornecidos
+        if norm == 'listening cerf' or norm == 'listening cefr':
+            mapping['listening_cerf'] = col
+        elif norm == 'listening':
+            mapping['listening'] = col
+        elif 'listening cerf' in norm or 'listening cefr' in norm:
+            mapping.setdefault('listening_cerf', col)
+        elif 'listening' in norm:
+            mapping.setdefault('listening', col)
+
+        if norm == 'lfm cerf' or norm == 'lfm cefr':
+            mapping['lfm_cerf'] = col
+        elif norm == 'lfm':
+            mapping['lfm'] = col
+        elif 'lfm cerf' in norm or 'lfm cefr' in norm:
+            mapping.setdefault('lfm_cerf', col)
+        elif 'lfm' in norm:
+            mapping.setdefault('lfm', col)
+
+        if norm == 'reading cerf' or norm == 'reading cefr':
+            mapping['reading_cerf'] = col
+        elif norm == 'reading':
+            mapping['reading'] = col
+        elif 'reading cerf' in norm or 'reading cefr' in norm:
+            mapping.setdefault('reading_cerf', col)
+        elif 'reading' in norm:
+            mapping.setdefault('reading', col)
+
+        if norm == 'lexil' or norm == 'lexile':
+            mapping['lexil'] = col
+        elif 'lexil' in norm or 'lexile' in norm:
+            mapping.setdefault('lexil', col)
+
+        if norm == 'osl':
+            mapping['osl'] = col
+        elif 'osl' in norm:
+            mapping.setdefault('osl', col)
+
+        if norm == 'total' or 'total' in norm:
+            mapping.setdefault('total', col)
+
+        if norm == 'cerf geral' or norm == 'cefr geral' or norm == 'geral cerf' or norm == 'geral cefr':
+            mapping['cerf_geral'] = col
+        elif ('cerf geral' in norm) or ('cefr geral' in norm) or ('geral cerf' in norm) or ('geral cefr' in norm):
+            mapping.setdefault('cerf_geral', col)
+    return mapping
+
+# Calcula CERF GERAL a partir dos CERF por habilidade, com fallback
+def compute_cerf_geral(metrics: dict):
+    """Calcula o CERF GERAL prioritariamente a partir do TOTAL, conforme faixas:
+    - B2 ≥ 865
+    - B1 ≥ 730
+    - A2 ≥ 600
+    - A1 < 600
+    Se o TOTAL estiver ausente/não numérico, faz fallback por maioria dos CERF das habilidades.
+    """
+
+    def parse_total(v):
+        try:
+            if v is None:
+                return None
+            if isinstance(v, (int, float)):
+                return float(v)
+            s = str(v).strip()
+            # Somente números e ponto; ignora sufixos não numéricos
+            return float(s) if s and s.replace('.', '', 1).isdigit() else None
+        except Exception:
+            return None
+
+    total_val = parse_total(metrics.get('total'))
+
+    # 1) Se TOTAL disponível, usar faixas definidas
+    if total_val is not None:
+        if total_val >= 865:
+            return 'B2'
+        if total_val >= 730:
+            return 'B1'
+        if total_val >= 600:
+            return 'A2'
+        # A1 apenas quando TOTAL < 600
+        return 'A1'
+
+    # 2) Fallback: maioria entre LISTENING/READING/LFM CERF
+    candidates = [
+        metrics.get('listening_cerf'),
+        metrics.get('lfm_cerf'),
+        metrics.get('reading_cerf')
+    ]
+    candidates = [str(x).strip().upper() for x in candidates if x is not None and str(x).strip()]
+    if not candidates:
+        return ''
+
+    order = {'A1': 1, 'A2': 2, 'B1': 3, 'B2': 4, 'C1': 5, 'C2': 6}
+    from collections import Counter
+    cnt = Counter(candidates)
+    most_common = cnt.most_common()
+    top_freq = most_common[0][1]
+    top_vals = [val for val, freq in most_common if freq == top_freq]
+    top_vals_sorted = sorted(top_vals, key=lambda v: order.get(v, 0))
+    mid_idx = len(top_vals_sorted) // 2
+    return top_vals_sorted[mid_idx] if top_vals_sorted else ''
+
+# CEFR Listening a partir da nota (TOEFL Junior 200–300)
+def get_listening_cefr(score):
+    try:
+        if score is None:
+            return None
+        s = float(score)
+    except Exception:
+        return None
+    if s >= 290:
+        return 'B2'
+    if s >= 245:
+        return 'B1'
+    # 210–244 e abaixo de 210 continuam como A2 no TOEFL Junior
+    return 'A2'
+
+# Normaliza rótulo escolar/turma para categorias usadas no CSA
+def normalize_school_label(label: str):
+    if not label:
+        return None
+    t = str(label).upper().strip()
+    # 6º ano
+    if '6' in t:
+        return '6'
+    # 9.1/9.2/9.3 explícitos
+    if '9.1' in t or '9-1' in t or '9A1' in t:
+        return '9.1'
+    if '9.2' in t or '9-2' in t or '9A2' in t:
+        return '9.2'
+    if '9.3' in t or '9-3' in t or '9A3' in t:
+        return '9.3'
+    # genérico 9º: assumir 9.1 como padrão conservador
+    if '9' in t:
+        return '9.1'
+    return None
+
+# Calcula Listening CSA (0.0–5.0) e detalhes conforme regras fornecidas
+def compute_listening_csa(school_label: str, listening_score):
+    cat = normalize_school_label(school_label or '')
+    # Parse score com segurança
+    try:
+        s = float(listening_score) if listening_score is not None else None
+    except Exception:
+        s = None
+    points = None
+    expected = None
+    obtained = get_listening_cefr(s) if s is not None else None
+    adjustment = None
+
+    if cat == '6':
+        # Âncoras: 200 -> 3.0; 264 -> 5.0
+        if s is None:
+            points = None
+        else:
+            # Regra solicitada: qualquer B1 (ou acima) no 6º ano ganha 5.0
+            if (obtained == 'B1') or (obtained == 'B2'):
+                points = 5.0
+            elif s >= 264:
+                points = 5.0
+            elif s >= 200:
+                points = 3.0 + ((s - 200) / 64.0) * 2.0
+            else:
+                points = (s / 200.0) * 3.0
+        if points is not None:
+            points = round(min(points, 5.0), 1)
+    elif cat == '9.1':
+        # Proporcional 0..284 -> 0..5.0
+        if s is None:
+            points = None
+        else:
+            points = min(5.0, (max(0.0, s) / 284.0) * 5.0)
+            points = round(points, 1)
+    elif cat in ('9.2', '9.3'):
+        # Degraus por diferença de CEFR (esperado B2)
+        expected = 'B2'
+        order = {'A2': 2, 'B1': 3, 'B2': 4, 'C1': 5, 'C2': 6}
+        ov = order.get(obtained, None)
+        ev = order.get(expected, None)
+        if ov is None or ev is None:
+            points = None
+        else:
+            diff = ov - ev
+            adjustment = diff
+            if diff >= 0:
+                points = 5.0
+            elif diff == -1:
+                points = 4.0
+            elif diff == -2:
+                points = 3.0
+            elif diff == -3:
+                points = 2.0
+            elif diff in (-4, -5):
+                points = 1.0
+            else:
+                points = 0.0
+            points = round(points, 1)
+    else:
+        # Categoria desconhecida: não calcula
+        points = None
+
+    return {
+        'points': points,
+        'expected_level': expected,
+        'obtained_level': obtained,
+        'adjustment': adjustment,
+    }
     
     def parse_toefl_name(self, toefl_name):
         """Parse TOEFL format name (LASTNAME, FIRSTNAME [MIDDLE])"""
@@ -302,6 +684,7 @@ def compare_names():
         algorithm = data.get('algorithm', 'token_sort_ratio')
         column1 = data.get('column1')  # coluna de nomes na planilha base
         column2 = data.get('column2')  # coluna de nomes na planilha TOEFL
+        default_school_label = data.get('default_school_label')
         
         # Função auxiliar para localizar arquivos por base name e extensões suportadas
         def find_uploaded_file(base_name):
@@ -346,8 +729,9 @@ def compare_names():
                 else:
                     names_col = df1_data.columns[0]
 
-                # Detectar dinamicamente TODAS as colunas relacionadas à turma/serie/letra (NÃO inclui nível)
-                class_keywords = {'turma','classe','serie','série','ano','grau','turno','sala'}
+                # Detectar dinamicamente apenas colunas diretamente relacionadas à turma/letra
+                # Restringir a 'turma' e 'classe' para evitar ruídos de 'ano/serie/grau'
+                class_keywords = {'turma','classe'}
                 class_cols = []
                 for col in df1_data.columns:
                     norm_col = comparator.normalize_name(str(col))
@@ -361,8 +745,18 @@ def compare_names():
                     if any(kw in norm_col for kw in {'turma','classe'}):
                         primary_class_col = col
                         break
-                if primary_class_col is None and class_cols:
-                    primary_class_col = class_cols[0]
+                # Fallback: se não houver coluna identificada por cabeçalho, assumir coluna B (índice 1)
+                if primary_class_col is None and len(df1_data.columns) >= 2:
+                    fallback_class_col = df1_data.columns[1]
+                    if fallback_class_col != names_col:
+                        primary_class_col = fallback_class_col
+                        if fallback_class_col not in class_cols:
+                            class_cols.append(fallback_class_col)
+                # Não usar fallback para outras colunas (ano/serie/grau), pois podem não conter a letra correta
+                try:
+                    print(f"[CLASS SOURCE] Sheet='{sheet_name}' names_col='{names_col}' primary_class_col='{primary_class_col}' class_cols={class_cols}")
+                except Exception:
+                    pass
 
                 # Detectar coluna de Professor e Nível
                 professor_col = None
@@ -384,13 +778,14 @@ def compare_names():
                 df_sub = df1_data[subset_cols].copy()
                 df_sub = df_sub[df_sub[names_col].notna()]
 
-                # Construir um campo normalizado combinando possíveis colunas de classe + nome da aba
+                # Construir um campo normalizado combinando possíveis colunas de classe + nome da aba (como fallback controlado)
                 sheet_norm = comparator.normalize_name(sheet_name)
                 def build_class_norm(row):
                     parts = []
                     for c in class_cols:
                         val = str(row[c]) if c in row else ''
                         parts.append(val)
+                    # incluir nome da aba como último recurso (não prioritário)
                     parts.append(sheet_norm)
                     combo = ' '.join([p for p in parts if p and p != 'nan'])
                     return comparator.normalize_name(combo)
@@ -452,6 +847,13 @@ def compare_names():
 
                 def clean_fund_label(norm, raw_class=None, raw_nivel=None, sheet_norm=None):
 
+                    def dbg(label, origin):
+                        try:
+                            print(f"[CLASS ORIGIN] origin='{origin}' | label='{label}' | raw_class='{raw_class}' | raw_nivel='{raw_nivel}' | sheet='{sheet_norm}' | text='{norm}'")
+                        except Exception:
+                            pass
+                        return label
+
                     def extract_num_letter(text):
                         # 6 a | 6º a | 6° a | 6 ano a | 6-a | 6a | 6 a manha
                         pats = [
@@ -486,53 +888,112 @@ def compare_names():
                         res = extract_num_letter(rc_norm)
                         if res:
                             num, let = res
-                            return f"FUND-{num}{let.upper()}"
+                            return dbg(f"FUND-{num}{let.upper()}", 'raw_class')
 
-                    # 1) Tenta no texto combinado (todas as colunas de classe)
+                    # 1) Tenta no texto combinado (somente colunas de turma/classe + aba)
                     res = extract_num_letter(norm)
-                    # Em seguida, tenta diretamente no Nível bruto (sem normalização), preservando pontuação
-                    if not res and raw_nivel:
-                        raw_nivel_str = str(raw_nivel).strip().lower()
-                        # 1) Aceitar apenas formato estrito X.Y com um dígito após o separador
-                        m_single = re.match(r"^\s*(\d{1,2})\s*[\.,;:-]\s*(\d)\s*$", raw_nivel_str)
-                        if m_single:
-                            num = m_single.group(1)
-                            minor = m_single.group(2)
-                            idx = int(minor)
-                            if 1 <= idx <= 26:
-                                let = chr(ord('a') + idx - 1)
-                                res = (num, let)
-                        else:
-                            # 2) Se vier com mais de um dígito (ex.: 6.31), usar o primeiro dígito após o separador
-                            m_multi = re.match(r"^\s*(\d{1,2})\s*[\.,;:-]\s*(\d{2,})\s*$", raw_nivel_str)
-                            if m_multi:
-                                num = m_multi.group(1)
-                                minor = m_multi.group(2)[0]  # primeiro dígito
-                                idx = int(minor)
+                    res_origin = 'norm_combo' if res else None
+                    # 1.0) Se não achou, tentar extrair padrão X.Y diretamente da turma crua (ex.: 'FERNANDA 6.4')
+                    if (not res) and raw_class:
+                        raw_class_str = str(raw_class).strip().lower()
+                        m = re.search(r"(\d{1,2})\s*[\.,;:-]\s*(\d+)", raw_class_str)
+                        if m:
+                            num = m.group(1)
+                            minor_first = m.group(2)[0]
+                            if minor_first.isdigit():
+                                idx = int(minor_first)
                                 if 1 <= idx <= 26:
                                     let = chr(ord('a') + idx - 1)
                                     res = (num, let)
+                                    res_origin = 'raw_class_xy'
+                        else:
+                            # Tentar padrão número + letra com ou sem separador: 6a, 6 a, 6-a
+                            m_letter = re.search(r"\b(\d{1,2})\s*[-_ ]?\s*([a-z])\b", raw_class_str)
+                            if m_letter:
+                                res = (m_letter.group(1), m_letter.group(2))
+                                res_origin = 'raw_class_letter'
                             else:
-                                # 3) Caso seja apenas número inteiro (ex.: "6"), não acrescentar letra
-                                m_int = re.match(r"^\s*(\d{1,2})\s*$", raw_nivel_str)
-                                if m_int:
-                                    res = (m_int.group(1), '')
-                    if not res:
-                        # Fallback: tenta no nome da aba
-                        res = extract_num_letter(sheet_norm or '')
+                                # Tentar padrão específico com prefixo FUND para casos como 'fund-6g'
+                                m_fund = re.search(r"\bfund[a-z]*[-\s]*(\d{1,2})\s*([a-z])\b", raw_class_str)
+                                if m_fund:
+                                    res = (m_fund.group(1), m_fund.group(2))
+                                    res_origin = 'raw_class_fund_letter'
+                                else:
+                                    m_int = re.search(r"(\d{1,2})", raw_class_str)
+                                    if m_int:
+                                        res = (m_int.group(1), '')
+                                        res_origin = 'raw_class_number_only'
+                        # Diagnóstico
+                        try:
+                            print(f"[CLASS DEBUG] raw_class_try_XY='{raw_class}' -> derived='{res}' | sheet='{sheet_norm}'")
+                        except Exception:
+                            pass
+                    # 1.1) Se a turma crua for genérica (ex.: 'FUND', 'FUNDAMENTAL', etc.), usar Nível para derivar letra
+                    raw_class_norm_up = comparator.normalize_name(str(raw_class)).upper() if raw_class is not None else ''
+                    # Considerar 'genérica' somente quando NÃO há letra: FUND, FUND-6, FUND 6, FUNDAMENTAL-6, etc.
+                    is_generic_class = (
+                        (not raw_class_norm_up) or
+                        (raw_class_norm_up in {'FUND','NAN'}) or
+                        bool(re.fullmatch(r"FUND(?:AMENTAL)?[-\s]*\d{1,2}", raw_class_norm_up))
+                    )
+                    if (not res) and raw_nivel and is_generic_class:
+                        raw_nivel_str = str(raw_nivel).strip().lower()
+                        # Formatos aceitos: X.Y / X-Y / X:Y / X;Y (apenas o primeiro dígito da parte menor)
+                        # Procurar padrão X.Y/X-Y/X:Y/X;Y em qualquer parte da string (ex.: 'FERNANDA 6.1')
+                        m = re.search(r"(\d{1,2})\s*[\.,;:-]\s*(\d+)", raw_nivel_str)
+                        if m:
+                            num = m.group(1)
+                            minor_first = m.group(2)[0]
+                            if minor_first.isdigit():
+                                idx = int(minor_first)
+                                if 1 <= idx <= 26:
+                                    let = chr(ord('a') + idx - 1)
+                                    res = (num, let)
+                                    res_origin = 'nivel_xy'
+                        else:
+                            # Inteiro simples: apenas número sem letra
+                            # Procurar inteiro simples (ex.: 'nível 6') em qualquer parte da string
+                            m_int = re.search(r"(\d{1,2})", raw_nivel_str)
+                            if m_int:
+                                res = (m_int.group(1), '')
+                                res_origin = 'nivel_number_only'
+                        # Diagnóstico: logar tentativa de derivação via nível
+                        try:
+                            print(f"[CLASS DEBUG] raw_class='{raw_class}' | raw_class_norm='{raw_class_norm_up}' | raw_nivel='{raw_nivel_str}' | sheet='{sheet_norm}' | derived='{res}'")
+                        except Exception:
+                            pass
+                    # Se não achou, tenta extrair número/letra do nome da aba
+                    if not res and sheet_norm:
+                        res = extract_num_letter(sheet_norm)
+                        res_origin = 'sheet_name'
+                    # Não inferir letra a partir do Nível; se não houver letra, manter apenas FUND-<número>
+                    # Não usar fallback no nome da aba para evitar letras indevidas vindas do título
                     if res:
                         num, let = res
-                        return f"FUND-{num}{let.upper()}" if let else f"FUND-{num}"
+                        label = f"FUND-{num}{let.upper()}" if let else f"FUND-{num}"
+                        return dbg(label, res_origin or 'unknown')
 
-                    # Fallback: detectar romano
+                    # Fallback: detectar romano ou número puro (6/9) para pelo menos obter FUND-<número>
                     m_rom = re.search(r"\bfund[a-z]*\b\s*(i{1,3}|iv|v|vi|vii|viii|ix|x)\b", norm)
                     if not m_rom and sheet_norm:
                         m_rom = re.search(r"\bfund[a-z]*\b\s*(i{1,3}|iv|v|vi|vii|viii|ix|x)\b", sheet_norm)
                     if m_rom:
                         num = roman_map.get(m_rom.group(1), '')
-                        return f"FUND-{num}" if num else "FUND"
+                        label = f"FUND-{num}" if num else "FUND"
+                        return dbg(label, 'roman')
 
-                    return "FUND"
+                    # Como último recurso, detectar 6 ou 9 no texto
+                    def find_plain_grade(text):
+                        if re.search(r"\b6\b", text):
+                            return '6'
+                        if re.search(r"\b9\b", text):
+                            return '9'
+                        return None
+                    num_only = find_plain_grade(norm) or (find_plain_grade(sheet_norm) if sheet_norm else None)
+                    if num_only:
+                        return dbg(f"FUND-{num_only}", 'plain_grade')
+
+                    return dbg("FUND", 'default')
                 # Calcular rótulo limpo FUND usando turma crua da planilha + classe normalizada + Nível bruto
                 df_sub['__class_clean__'] = df_sub.apply(
                     lambda row: clean_fund_label(
@@ -543,6 +1004,15 @@ def compare_names():
                     ),
                     axis=1
                 )
+                # Diagnóstico geral: quantos rótulos ficaram como apenas FUND
+                try:
+                    fund_only_count = int((df_sub['__class_clean__'] == 'FUND').sum())
+                    print(f"[CLASS DEBUG] Sheet='{sheet_name}' FUND-only rows: {fund_only_count}/{len(df_sub)}")
+                    # Distribuição por turma
+                    dist = df_sub['__class_clean__'].value_counts()
+                    print(f"[CLASS SUMMARY] Sheet='{sheet_name}' distribution: {dict(dist)}")
+                except Exception:
+                    pass
 
                 # Após limpar, manter apenas linhas de FUND
                 df_sub = df_sub[df_sub['__class_clean__'].str.startswith('FUND')]
@@ -576,11 +1046,29 @@ def compare_names():
             base_professors = dedup_professors
             base_levels = dedup_levels
 
-            # Obter nomes TOEFL
+            # Obter nomes TOEFL e mapear métricas por linha
             if column2 and column2 in df2.columns:
-                toefl_names = df2[column2].dropna().astype(str).tolist()
+                df2_name_col = column2
             else:
-                toefl_names = df2.iloc[:, 0].dropna().astype(str).tolist()  # padrão: primeira coluna
+                # Preferir coluna chamada exatamente 'NOME' quando existir
+                df2_name_col = None
+                for col in df2.columns:
+                    if comparator.normalize_name(str(col)) == 'nome':
+                        df2_name_col = col
+                        break
+                if df2_name_col is None:
+                    df2_name_col = df2.columns[0]
+            toefl_names = df2[df2_name_col].dropna().astype(str).tolist()
+
+            # Mapa de colunas TOEFL para extração de métricas
+            toefl_colmap = build_toefl_columns_map(df2.columns, comparator.normalize_name)
+            # Índice de linhas por nome normalizado
+            df2_index_by_name = {}
+            for _, row in df2.iterrows():
+                nm = str(row[df2_name_col]) if df2_name_col in row else ''
+                key = comparator.normalize_name(nm)
+                if key:
+                    df2_index_by_name[key] = row
             
             
         # Perform comparison
@@ -631,13 +1119,55 @@ def compare_names():
                     print(f"[DEBUG] TOEFL='{toefl_name}' | best_above_threshold={best_score} | abs_best={abs_best_score} -> '{abs_best_match}' turma='{abs_best_class}'")
 
                 if best_match:
+                    # Extrair métricas TOEFL da linha correspondente
+                    row = df2_index_by_name.get(comparator.normalize_name(toefl_name))
+                    metrics = {}
+                    if row is not None:
+                        def getv(key):
+                            col = toefl_colmap.get(key)
+                            return (row[col] if col in row else None) if col else None
+                        def san(v):
+                            try:
+                                return None if pd.isna(v) else v
+                            except Exception:
+                                return v if v is not None else None
+                        metrics = {
+                            'listening': san(getv('listening')),
+                            'listening_cerf': san(getv('listening_cerf')),
+                            'lfm': san(getv('lfm')),
+                            'lfm_cerf': san(getv('lfm_cerf')),
+                            'reading': san(getv('reading')),
+                            'reading_cerf': san(getv('reading_cerf')),
+                            'lexil': san(getv('lexil')),
+                            'osl': san(getv('osl')),
+                            'total': san(getv('total')),
+                            'cerf_geral': san(getv('cerf_geral')),
+                        }
+                    cerf_geral = compute_cerf_geral(metrics)
+                    # Listening CSA com base na turma encontrada; se ausente, usar seleção do usuário
+                    fallback_label = None if (default_school_label is None or str(default_school_label).strip().lower() == 'auto') else default_school_label
+                    effective_label = best_class if (best_class and str(best_class).strip()) else fallback_label
+                    csa = compute_listening_csa(effective_label, metrics.get('listening'))
+
                     results.append({
                         'toefl_name': toefl_name,
                         'matched_name': best_match,
                         'class': best_class,
                         'professor': best_professor,
                         'nivel': normalize_nivel_display(best_nivel),
-                        'score': round(best_score, 2)
+                        'score': round(best_score, 2),
+                        # métricas TOEFL para exportação final
+                        'listening': metrics.get('listening'),
+                        'listening_cerf': metrics.get('listening_cerf'),
+                        'listening_csa': csa.get('points'),
+                        'lfm': metrics.get('lfm'),
+                        'lfm_cerf': metrics.get('lfm_cerf'),
+                        'reading': metrics.get('reading'),
+                        'reading_cerf': metrics.get('reading_cerf'),
+                        'lexil': metrics.get('lexil'),
+                        'osl': metrics.get('osl'),
+                        'total': metrics.get('total'),
+                        'cerf_geral': cerf_geral
                     })
                 else:
                     # Build suggestions (top 3 by score) when no match above threshold
@@ -651,7 +1181,7 @@ def compare_names():
                                     'name': n,
                                     'class': c,
                                     'professor': p,
-                                    'nivel': normalize_nivel_display(lv),
+                                    'nivel': normalize_nivel_display(None if pd.isna(lv) else lv),
                                     'score': round(s, 2)
                                 } for (n, c, p, lv, s) in top
                             ]
@@ -695,20 +1225,117 @@ def export_results():
         data = request.get_json()
         results = data.get('results', [])
         unmatched = data.get('unmatched_list', [])
+        default_school_label = data.get('default_school_label')
         
-        # Criar DataFrame para exportação (sem coluna de Similaridade)
+        # Criar DataFrame para exportação com os campos exigidos
         export_rows = []
         for r in results:
             export_rows.append({
-                'Nome': r.get('toefl_name', ''),
-                'Nome Completo': r.get('matched_name', ''),
-                'Turma': r.get('class', ''),
-                'Professor': r.get('professor', ''),
-                'Nivel': r.get('nivel', '')
+                'NOME': r.get('toefl_name', ''),
+                'NOME ENCONTRADO': r.get('matched_name', ''),
+                'TURMA': r.get('class', ''),
+                'PROFESSOR': r.get('professor', ''),
+                'NÍVEL': r.get('nivel', ''),
+                'LISTENING': r.get('listening', ''),
+                'LISTENING CERF': r.get('listening_cerf', ''),
+                'LISTENING CSA': r.get('listening_csa', ''),
+                'LFM': r.get('lfm', ''),
+                'LFM CERF': r.get('lfm_cerf', ''),
+                'READING': r.get('reading', ''),
+                'READING CERF': r.get('reading_cerf', ''),
+                'LEXIL': r.get('lexil', ''),
+                'OSL': r.get('osl', ''),
+                'TOTAL': r.get('total', ''),
+                'CERF GERAL': r.get('cerf_geral', '')
             })
-        
+
+        # Acrescentar os não encontrados com suas pontuações da planilha TOEFL
+        if unmatched:
+            # Localizar o arquivo de TOEFL enviado
+            def find_uploaded_file(base_name):
+                for ext in ['.xlsx', '.xls', '.csv']:
+                    path = os.path.join(app.config['UPLOAD_FOLDER'], f'{base_name}{ext}')
+                    if os.path.exists(path):
+                        return path, ext
+                return None, None
+
+            file2_path, ext2 = find_uploaded_file('file2')
+            if file2_path:
+                df2 = pd.read_excel(file2_path) if ext2 in ['.xlsx', '.xls'] else pd.read_csv(file2_path)
+                comparator = NameComparator()
+                toefl_colmap = build_toefl_columns_map(df2.columns, comparator.normalize_name)
+                # Detectar coluna de nome preferindo 'NOME'
+                df2_name_col = None
+                for col in df2.columns:
+                    if comparator.normalize_name(str(col)) == 'nome':
+                        df2_name_col = col
+                        break
+                if df2_name_col is None:
+                    df2_name_col = df2.columns[0]
+                # Índice por nome normalizado
+                df2_index_by_name = {}
+                for _, row in df2.iterrows():
+                    nm = str(row[df2_name_col]) if df2_name_col in row else ''
+                    key = comparator.normalize_name(nm)
+                    if key:
+                        df2_index_by_name[key] = row
+
+                def san(v):
+                    try:
+                        return None if pd.isna(v) else v
+                    except Exception:
+                        return v if v is not None else None
+
+                for nm in unmatched:
+                    row = df2_index_by_name.get(comparator.normalize_name(nm))
+                    metrics = {}
+                    if row is not None:
+                        def getv(key):
+                            col = toefl_colmap.get(key)
+                            return (row[col] if col in row else None) if col else None
+                        metrics = {
+                            'listening': san(getv('listening')),
+                            'listening_cerf': san(getv('listening_cerf')),
+                            'lfm': san(getv('lfm')),
+                            'lfm_cerf': san(getv('lfm_cerf')),
+                            'reading': san(getv('reading')),
+                            'reading_cerf': san(getv('reading_cerf')),
+                            'lexil': san(getv('lexil')),
+                            'osl': san(getv('osl')),
+                            'total': san(getv('total')),
+                            'cerf_geral': san(getv('cerf_geral')),
+                        }
+                    cerf_geral = compute_cerf_geral(metrics)
+                    # Para não encontrados, calcular Listening CSA usando ano selecionado (ou 9.1 se "auto")
+                    fallback_label = '9.1' if (default_school_label is None or str(default_school_label).strip().lower() == 'auto') else default_school_label
+                    csa_unmatched = compute_listening_csa(fallback_label, metrics.get('listening')) if metrics else {'points': ''}
+
+                    export_rows.append({
+                        'NOME': nm,
+                        'NOME ENCONTRADO': '',
+                        'TURMA': '',
+                        'PROFESSOR': '',
+                        'NÍVEL': '',
+                        'LISTENING': metrics.get('listening', ''),
+                        'LISTENING CERF': metrics.get('listening_cerf', ''),
+                        'LISTENING CSA': csa_unmatched.get('points', ''),
+                        'LFM': metrics.get('lfm', ''),
+                        'LFM CERF': metrics.get('lfm_cerf', ''),
+                        'READING': metrics.get('reading', ''),
+                        'READING CERF': metrics.get('reading_cerf', ''),
+                        'LEXIL': metrics.get('lexil', ''),
+                        'OSL': metrics.get('osl', ''),
+                        'TOTAL': metrics.get('total', ''),
+                        'CERF GERAL': cerf_geral
+                    })
+
         df_export = pd.DataFrame(export_rows)
-        df_unmatched = pd.DataFrame({'Alunos_Nao_Encontrados': unmatched})
+        # Diagnóstico: logar colunas geradas e contagem de linhas
+        try:
+            print('[EXPORT DEBUG] Colunas:', list(df_export.columns))
+            print('[EXPORT DEBUG] Linhas:', len(df_export))
+        except Exception as _e:
+            pass
         
         # Criar arquivo Excel em memória
         output = io.BytesIO()
@@ -717,10 +1344,7 @@ def export_results():
             sheet_name = 'Resultados_Comparacao'
             df_export.to_excel(writer, sheet_name=sheet_name, index=False)
 
-            # Se houver não encontrados, escrever ao final da mesma aba
-            if not df_unmatched.empty:
-                start_row = len(df_export) + 3  # duas linhas em branco + cabeçalho
-                df_unmatched.to_excel(writer, sheet_name=sheet_name, startrow=start_row, index=False)
+            # Não é necessário escrever seção separada; não encontrados já foram incluídos
         
         output.seek(0)
         
@@ -735,4 +1359,4 @@ def export_results():
         return jsonify({'error': f'Erro na exportação: {str(e)}'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 5001)))

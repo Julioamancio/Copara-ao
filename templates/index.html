@@ -204,6 +204,19 @@
                         <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
+                                    <label for="schoolYearSelect" class="form-label">Ano para cálculos de CSA</label>
+                                    <select id="schoolYearSelect" class="form-select">
+                                        <option value="auto">Detectar automaticamente pela turma (padrão)</option>
+                                        <option value="6">6º ano</option>
+                                        <option value="9.1">9º ano (padrão 9.1)</option>
+                                    </select>
+                                    <div class="form-text">Selecione o ano escolar para aplicar as regras de CSA. Se "auto" estiver selecionado, o sistema usa a turma encontrada; caso não haja turma, usa o valor escolhido aqui.</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
                                     <label for="column1" class="form-label">Coluna de Nomes na Planilha Base</label>
                                     <select id="column1" class="form-select">
                                         <!-- opções preenchidas após upload -->

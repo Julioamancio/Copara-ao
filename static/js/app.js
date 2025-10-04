@@ -220,6 +220,8 @@ class ComparisonDashboard {
     async handleComparison() {
         const threshold = document.getElementById('threshold').value;
         const algorithm = document.getElementById('algorithm').value;
+        const schoolYearEl = document.getElementById('schoolYearSelect');
+        const defaultSchoolLabel = schoolYearEl ? schoolYearEl.value : 'auto';
         const column1El = document.getElementById('column1');
         const column2El = document.getElementById('column2');
         const column1 = column1El ? column1El.value : null;
@@ -229,7 +231,8 @@ class ComparisonDashboard {
             threshold: parseInt(threshold),
             algorithm: algorithm,
             column1: column1,
-            column2: column2
+            column2: column2,
+            default_school_label: defaultSchoolLabel
         };
 
         try {
@@ -407,6 +410,8 @@ class ComparisonDashboard {
 
         try {
             this.showLoading('Preparando exportação...');
+            const schoolYearEl = document.getElementById('schoolYearSelect');
+            const defaultSchoolLabel = schoolYearEl ? schoolYearEl.value : 'auto';
             
             const response = await fetch('/export', {
                 method: 'POST',
@@ -415,7 +420,8 @@ class ComparisonDashboard {
                 },
                 body: JSON.stringify({
                     results: this.currentResults.results,
-                    unmatched_list: this.currentResults.unmatched_list || []
+                    unmatched_list: this.currentResults.unmatched_list || [],
+                    default_school_label: defaultSchoolLabel
                 })
             });
 
