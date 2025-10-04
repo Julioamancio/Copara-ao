@@ -227,6 +227,92 @@ class NameComparator:
         else:
             return fuzz.token_sort_ratio(str1, str2)
 
+
+CLASS_ALLOWED_LETTERS = {
+    '6': {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'},
+    '9': {'a', 'b', 'c', 'd', 'e', 'f', 'g'},
+}
+
+CLASS_INDEX_TO_LETTER = {
+    '6': {'1': 'A', '2': 'B', '3': 'C', '4': 'D', '5': 'E', '6': 'F', '7': 'G', '8': 'H'},
+    '9': {'1': 'A', '2': 'B', '3': 'C', '4': 'D', '5': 'E', '6': 'F', '7': 'G'},
+}
+
+ROMAN_GRADE_MAP = {
+    'vi': '6',
+    'ix': '9',
+}
+
+
+def _format_fund_label(grade, letter):
+    if not grade:
+        return None
+    if grade not in CLASS_ALLOWED_LETTERS:
+        return None
+    if letter:
+        letter_upper = letter.upper()
+        if letter_upper.lower() not in CLASS_ALLOWED_LETTERS[grade]:
+            return None
+        return f'FUND-{grade}{letter_upper}'
+    return f'FUND-{grade}'
+
+
+def _extract_grade_letter_from_text(text, comparator):
+    if text is None:
+        return None, None
+    value = str(text).strip()
+    if not value or value.lower() == 'nan':
+        return None, None
+    norm = comparator.normalize_name(value)
+    if not norm:
+        return None, None
+    norm = re.sub(r'(\d)([a-z])', r'\1 \2', norm)
+    norm = re.sub(r'([a-z])(\d)', r'\1 \2', norm)
+    for roman, grade in ROMAN_GRADE_MAP.items():
+        norm = re.sub(rf'\b{roman}\b', grade, norm)
+    search_text = norm
+
+    match = re.search(r'\b(6|9)\s*(?:ano|serie|grau)?\s*([a-h])\b', search_text)
+    if match:
+        grade, letter = match.groups()
+        return grade, letter
+
+    match = re.search(r'\b(6|9)([a-h])\b', search_text)
+    if match:
+        grade, letter = match.groups()
+        return grade, letter
+
+    match = re.search(r'\b(6|9)\s*(?:[\.,;:-])\s*([1-8])\b', search_text)
+    if match:
+        grade, idx = match.groups()
+        mapped = CLASS_INDEX_TO_LETTER.get(grade, {}).get(idx)
+        if mapped:
+            return grade, mapped.lower()
+
+    match = re.search(r'\b(6|9)([1-8])\b', search_text)
+    if match:
+        grade, idx = match.groups()
+        mapped = CLASS_INDEX_TO_LETTER.get(grade, {}).get(idx)
+        if mapped:
+            return grade, mapped.lower()
+
+    grade_match = re.search(r'\b(6|9)\b', search_text)
+    if grade_match:
+        grade = grade_match.group(1)
+        tokens = search_text.split()
+        for token in tokens:
+            if token in CLASS_ALLOWED_LETTERS.get(grade, set()):
+                return grade, token
+            if token == grade:
+                continue
+            mapped = CLASS_INDEX_TO_LETTER.get(grade, {}).get(token)
+            if mapped:
+                return grade, mapped.lower()
+        return grade, None
+
+    return None, None
+
+
 # Utilitário: mapeia colunas da planilha TOEFL para nomes padronizados
 def build_toefl_columns_map(df_columns, normalizer):
     mapping = {}
@@ -818,11 +904,6 @@ def compare_names():
                 print(f"[DEBUG] Sheet='{sheet_name}' extracurricular filter: kept {after_count}/{before_count}")
 
                 # Limpar rótulo da turma para mostrar FUND-<numero><letra>, usando o texto combinado
-                roman_map = {
-                    'i': '1','ii': '2','iii': '3','iv': '4','v': '5',
-                    'vi': '6','vii': '7','viii': '8','ix': '9','x': '10'
-                }
-
                 # Normaliza a visualização do Nível para formato fechado (ex.: 6.1/6.2/6.3)
                 def normalize_nivel_display(raw_nivel):
                     if raw_nivel is None:
@@ -854,146 +935,37 @@ def compare_names():
                             pass
                         return label
 
-                    def extract_num_letter(text):
-                        # 6 a | 6º a | 6° a | 6 ano a | 6-a | 6a | 6 a manha
-                        pats = [
-                            r"\b(\d{1,2})\s*(?:ano|serie|grau|º|°)?\s*([a-z])\b",
-                            r"\b(\d{1,2})\s*[-_]\s*([a-z])\b",
-                            r"\b(\d{1,2}[a-z])\b",
-                            # Não usar padrões sem separador; focar em maior.minor apenas
-                        ]
-                        for p in pats:
-                            m = re.search(p, text)
-                            if m:
-                                if m.lastindex == 2:
-                                    num = m.group(1)
-                                    let = m.group(2)
-                                    # Se 'let' é dígito (padrão 6.1), converter para letra
-                                    if re.fullmatch(r"\d", let):
-                                        idx = int(let)
-                                        if 1 <= idx <= 26:
-                                            let = chr(ord('a') + idx - 1)
-                                    return num, let
-                                else:
-                                    g = m.group(1)
-                                    num = re.findall(r"\d{1,2}", g)
-                                    let = re.findall(r"[a-z]", g)
-                                    if num and let:
-                                        return num[0], let[0]
-                        return None
+                    sources = [
+                        ('raw_class', raw_class),
+                        ('raw_nivel', raw_nivel),
+                        ('norm_combo', norm),
+                        ('sheet_name', sheet_norm),
+                    ]
 
-                    # 0) Tentar primeiro a turma crua vinda da planilha
-                    if raw_class:
-                        rc_norm = comparator.normalize_name(str(raw_class))
-                        res = extract_num_letter(rc_norm)
-                        if res:
-                            num, let = res
-                            return dbg(f"FUND-{num}{let.upper()}", 'raw_class')
+                    fallback_label = None
+                    fallback_origin = None
 
-                    # 1) Tenta no texto combinado (somente colunas de turma/classe + aba)
-                    res = extract_num_letter(norm)
-                    res_origin = 'norm_combo' if res else None
-                    # 1.0) Se não achou, tentar extrair padrão X.Y diretamente da turma crua (ex.: 'FERNANDA 6.4')
-                    if (not res) and raw_class:
-                        raw_class_str = str(raw_class).strip().lower()
-                        m = re.search(r"(\d{1,2})\s*[\.,;:-]\s*(\d+)", raw_class_str)
-                        if m:
-                            num = m.group(1)
-                            minor_first = m.group(2)[0]
-                            if minor_first.isdigit():
-                                idx = int(minor_first)
-                                if 1 <= idx <= 26:
-                                    let = chr(ord('a') + idx - 1)
-                                    res = (num, let)
-                                    res_origin = 'raw_class_xy'
-                        else:
-                            # Tentar padrão número + letra com ou sem separador: 6a, 6 a, 6-a
-                            m_letter = re.search(r"\b(\d{1,2})\s*[-_ ]?\s*([a-z])\b", raw_class_str)
-                            if m_letter:
-                                res = (m_letter.group(1), m_letter.group(2))
-                                res_origin = 'raw_class_letter'
-                            else:
-                                # Tentar padrão específico com prefixo FUND para casos como 'fund-6g'
-                                m_fund = re.search(r"\bfund[a-z]*[-\s]*(\d{1,2})\s*([a-z])\b", raw_class_str)
-                                if m_fund:
-                                    res = (m_fund.group(1), m_fund.group(2))
-                                    res_origin = 'raw_class_fund_letter'
-                                else:
-                                    m_int = re.search(r"(\d{1,2})", raw_class_str)
-                                    if m_int:
-                                        res = (m_int.group(1), '')
-                                        res_origin = 'raw_class_number_only'
-                        # Diagnóstico
-                        try:
-                            print(f"[CLASS DEBUG] raw_class_try_XY='{raw_class}' -> derived='{res}' | sheet='{sheet_norm}'")
-                        except Exception:
-                            pass
-                    # 1.1) Se a turma crua for genérica (ex.: 'FUND', 'FUNDAMENTAL', etc.), usar Nível para derivar letra
-                    raw_class_norm_up = comparator.normalize_name(str(raw_class)).upper() if raw_class is not None else ''
-                    # Considerar 'genérica' somente quando NÃO há letra: FUND, FUND-6, FUND 6, FUNDAMENTAL-6, etc.
-                    is_generic_class = (
-                        (not raw_class_norm_up) or
-                        (raw_class_norm_up in {'FUND','NAN'}) or
-                        bool(re.fullmatch(r"FUND(?:AMENTAL)?[-\s]*\d{1,2}", raw_class_norm_up))
-                    )
-                    if (not res) and raw_nivel and is_generic_class:
-                        raw_nivel_str = str(raw_nivel).strip().lower()
-                        # Formatos aceitos: X.Y / X-Y / X:Y / X;Y (apenas o primeiro dígito da parte menor)
-                        # Procurar padrão X.Y/X-Y/X:Y/X;Y em qualquer parte da string (ex.: 'FERNANDA 6.1')
-                        m = re.search(r"(\d{1,2})\s*[\.,;:-]\s*(\d+)", raw_nivel_str)
-                        if m:
-                            num = m.group(1)
-                            minor_first = m.group(2)[0]
-                            if minor_first.isdigit():
-                                idx = int(minor_first)
-                                if 1 <= idx <= 26:
-                                    let = chr(ord('a') + idx - 1)
-                                    res = (num, let)
-                                    res_origin = 'nivel_xy'
-                        else:
-                            # Inteiro simples: apenas número sem letra
-                            # Procurar inteiro simples (ex.: 'nível 6') em qualquer parte da string
-                            m_int = re.search(r"(\d{1,2})", raw_nivel_str)
-                            if m_int:
-                                res = (m_int.group(1), '')
-                                res_origin = 'nivel_number_only'
-                        # Diagnóstico: logar tentativa de derivação via nível
-                        try:
-                            print(f"[CLASS DEBUG] raw_class='{raw_class}' | raw_class_norm='{raw_class_norm_up}' | raw_nivel='{raw_nivel_str}' | sheet='{sheet_norm}' | derived='{res}'")
-                        except Exception:
-                            pass
-                    # Se não achou, tenta extrair número/letra do nome da aba
-                    if not res and sheet_norm:
-                        res = extract_num_letter(sheet_norm)
-                        res_origin = 'sheet_name'
-                    # Não inferir letra a partir do Nível; se não houver letra, manter apenas FUND-<número>
-                    # Não usar fallback no nome da aba para evitar letras indevidas vindas do título
-                    if res:
-                        num, let = res
-                        label = f"FUND-{num}{let.upper()}" if let else f"FUND-{num}"
-                        return dbg(label, res_origin or 'unknown')
+                    for origin, candidate in sources:
+                        grade, letter = _extract_grade_letter_from_text(candidate, comparator)
+                        if not grade:
+                            continue
+                        allowed_letters = CLASS_ALLOWED_LETTERS.get(grade, set())
+                        if letter and letter.lower() in allowed_letters:
+                            label = _format_fund_label(grade, letter)
+                            if label:
+                                return dbg(label, origin)
+                        if fallback_label is None:
+                            fallback = _format_fund_label(grade, None)
+                            if fallback:
+                                fallback_label = fallback
+                                fallback_origin = origin
 
-                    # Fallback: detectar romano ou número puro (6/9) para pelo menos obter FUND-<número>
-                    m_rom = re.search(r"\bfund[a-z]*\b\s*(i{1,3}|iv|v|vi|vii|viii|ix|x)\b", norm)
-                    if not m_rom and sheet_norm:
-                        m_rom = re.search(r"\bfund[a-z]*\b\s*(i{1,3}|iv|v|vi|vii|viii|ix|x)\b", sheet_norm)
-                    if m_rom:
-                        num = roman_map.get(m_rom.group(1), '')
-                        label = f"FUND-{num}" if num else "FUND"
-                        return dbg(label, 'roman')
+                    if fallback_label:
+                        origin_label = f"{fallback_origin}_fallback" if fallback_origin else 'fallback'
+                        return dbg(fallback_label, origin_label)
 
-                    # Como último recurso, detectar 6 ou 9 no texto
-                    def find_plain_grade(text):
-                        if re.search(r"\b6\b", text):
-                            return '6'
-                        if re.search(r"\b9\b", text):
-                            return '9'
-                        return None
-                    num_only = find_plain_grade(norm) or (find_plain_grade(sheet_norm) if sheet_norm else None)
-                    if num_only:
-                        return dbg(f"FUND-{num_only}", 'plain_grade')
+                    return dbg('FUND', 'default')
 
-                    return dbg("FUND", 'default')
                 # Calcular rótulo limpo FUND usando turma crua da planilha + classe normalizada + Nível bruto
                 df_sub['__class_clean__'] = df_sub.apply(
                     lambda row: clean_fund_label(
